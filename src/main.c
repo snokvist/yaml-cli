@@ -2,6 +2,8 @@
 #include "input_data.h"
 #include "value_finder.h"
 #include "yaml_iterator.h"
+#include <stdlib.h>
+#include <string.h>
 
 static prog_args_t *g_args = NULL;
 static value_finder_t *g_value_finder = NULL;
@@ -20,87 +22,37 @@ static yaml_iterator_event_result_t on_iterator_event(void *data,
     int g_value_finder_ret = g_value_finder->input(g_value_finder, event);
 
     if (g_args->mode == WORK_GET) {
-        if (g_value_finder_ret == 1) {
+        if (g_value_finder_ret == 1)
             return YAML_ITERATOR_EVENT_STOP;
-        }
     }
 
     if (g_args->mode == WORK_SET) {
-        if (g_value_finder_ret == 4) {
-            if (!g_value_finded) {
-                char value_block[strlen(g_args->variable_path)];
-                strcpy(value_block, g_args->variable_path + 1);
-                value_block[strstr(value_block + 1, ".") - value_block] = '\0';
-
-                if (!yaml_scalar_event_initialize(
-                        &ins_event, NULL, NULL, (yaml_char_t *)value_block,
-                        strlen(value_block), 1, 0, YAML_PLAIN_SCALAR_STYLE))
-                    return YAML_ITERATOR_EVENT_STOP;
-
-                if (!emitter->input(data, &ins_event))
-                    return YAML_ITERATOR_EVENT_STOP;
-
-                if (!yaml_mapping_start_event_initialize(
-                        &ins_event, NULL, NULL, 0, YAML_BLOCK_MAPPING_STYLE))
-                    return YAML_ITERATOR_EVENT_STOP;
-
-                if (!emitter->input(data, &ins_event)) {
-                    return YAML_ITERATOR_EVENT_STOP;
-                }
-            }
+        if (g_value_finder_ret == 3 && !g_value_finded) {
+            /* Inject new key/value pair since the parent mapping closed without finding the key */
+            char *last_dot = strrchr(g_args->variable_path, '.');
+            char *final_token = (last_dot) ? last_dot + 1 : g_args->variable_path;
+            if (!yaml_scalar_event_initialize(&ins_event, NULL, NULL,
+                    (yaml_char_t *)final_token, strlen(final_token), 1, 0, YAML_PLAIN_SCALAR_STYLE))
+                return YAML_ITERATOR_EVENT_STOP;
+            if (!emitter->input(data, &ins_event))
+                return YAML_ITERATOR_EVENT_STOP;
+            if (!yaml_scalar_event_initialize(&ins_event, NULL, NULL,
+                    (yaml_char_t *)g_args->variable_value, strlen(g_args->variable_value), 1, 0, YAML_PLAIN_SCALAR_STYLE))
+                return YAML_ITERATOR_EVENT_STOP;
+            if (!emitter->input(data, &ins_event))
+                return YAML_ITERATOR_EVENT_STOP;
+            g_value_finded = 1;
         }
-        if ((g_value_finder_ret == 3) || (g_value_finder_ret == 4)) {
-            if (!g_value_finded) {
-
-                if (!yaml_scalar_event_initialize(
-                        &ins_event, NULL, NULL,
-                        (yaml_char_t *)strstr(g_args->variable_path + 1, ".") +
-                            1,
-                        strlen(strstr(g_args->variable_path + 1, ".") + 1), 1,
-                        0, YAML_PLAIN_SCALAR_STYLE))
-                    return YAML_ITERATOR_EVENT_STOP;
-
-                if (!emitter->input(data, &ins_event)) {
-                    return YAML_ITERATOR_EVENT_STOP;
-                }
-                if (!yaml_scalar_event_initialize(
-                        &ins_event, NULL, NULL,
-                        (yaml_char_t *)g_args->variable_value,
-                        strlen(g_args->variable_value), 1, 0,
-                        YAML_PLAIN_SCALAR_STYLE))
-                    return YAML_ITERATOR_EVENT_STOP;
-
-                if (!emitter->input(data, &ins_event)) {
-                    return YAML_ITERATOR_EVENT_STOP;
-                }
-                if (g_value_finder_ret == 3)
-                    g_value_finded = 1;
-            }
-        }
-        if (g_value_finder_ret == 4) {
-            if (!g_value_finded) {
-
-                if (!yaml_mapping_end_event_initialize(&ins_event))
-                    return YAML_ITERATOR_EVENT_STOP;
-
-                if (!emitter->input(data, &ins_event)) {
-                    return YAML_ITERATOR_EVENT_STOP;
-                }
-            }
-        }
-        if (!emitter->input(data, event)) {
+        if (!emitter->input(data, event))
             return YAML_ITERATOR_EVENT_STOP;
-        }
         return YAML_ITERATOR_EVENT_EATEN;
     }
 
     if (g_args->mode == WORK_DEL) {
-        if ((g_value_finder_ret == 1) || (g_value_finder_ret == 2)) {
+        if ((g_value_finder_ret == 1) || (g_value_finder_ret == 2))
             return YAML_ITERATOR_EVENT_EATEN;
-        }
         if (!emitter->input(data, event))
             return YAML_ITERATOR_EVENT_STOP;
-
         return YAML_ITERATOR_EVENT_EATEN;
     }
 
@@ -109,19 +61,15 @@ static yaml_iterator_event_result_t on_iterator_event(void *data,
 
 static int on_value_finded(void *data, yaml_event_t *event) {
     value_finder_t *f = (value_finder_t *)data;
-
     if (g_args->mode == WORK_GET) {
         fprintf(stdout, "%s\n", event->data.scalar.value);
-
         g_value_finded = 1;
         return 1;
     }
-
     if (g_args->mode == WORK_DEL) {
         g_value_finded = 1;
         return 1;
     }
-
     g_value_finded = 1;
     free(event->data.scalar.value);
     event->data.scalar.length = strlen(g_args->variable_value);
@@ -129,7 +77,6 @@ static int on_value_finded(void *data, yaml_event_t *event) {
     strncpy((char *)event->data.scalar.value, g_args->variable_value,
             event->data.scalar.length);
     event->data.scalar.value[event->data.scalar.length] = 0;
-
     return 0;
 }
 
@@ -180,12 +127,11 @@ int main(int argc, char *argv[]) {
 
     free(emitter.buffer);
 
-    if (g_args->mode == WORK_GET) {
+    if (g_args->mode == WORK_GET)
         return !g_value_finded;
-    } else {
+    else {
         if (emitter_ret_code != EXIT_SUCCESS)
             return EXIT_FAILURE;
-
         return !g_value_finded;
     }
 }
